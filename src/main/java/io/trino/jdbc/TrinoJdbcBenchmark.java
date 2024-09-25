@@ -94,7 +94,7 @@ public class TrinoJdbcBenchmark
 
         for (int i = 1; i <= RUNS; i++) {
             System.out.println("=================================================");
-            long rows = 0;
+            long rows = 1;
             long start = System.nanoTime();
             long decodingTime = 0;
             try (Connection connection = driver.connect(trinoUri, connectionProperties())) {
