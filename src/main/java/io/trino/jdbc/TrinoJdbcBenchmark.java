@@ -43,24 +43,26 @@ public class TrinoJdbcBenchmark
     private final String tracingUri;
     private final String trinoUri;
     private final String query;
+    private final int expectedRows;
 
     public static void main(String[] args)
             throws Exception
     {
         if (args.length == 0) {
-            System.out.println("Usage ./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar [TRACING COLLECTOR URI] [TRINO URI] [TRINO QUERY]");
+            System.out.println("Usage ./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar [TRACING COLLECTOR URI] [TRINO URI] [TRINO QUERY] [EXPECTED ROWS]");
         }
-        checkState(args.length == 3, "Expected 3 arguments, got %s", args.length);
+        checkState(args.length == 4, "Expected 4 arguments, got %s", args.length);
 
-        TrinoJdbcBenchmark benchmark = new TrinoJdbcBenchmark(args[0], args[1], args[2]);
+        TrinoJdbcBenchmark benchmark = new TrinoJdbcBenchmark(args[0], args[1], args[2], Integer.parseInt(args[3]));
         benchmark.run();
     }
 
-    public TrinoJdbcBenchmark(String tracingUri, String trinoUri, String query)
+    public TrinoJdbcBenchmark(String tracingUri, String trinoUri, String query, int expectedRows)
     {
         this.tracingUri = tracingUri;
         this.trinoUri = trinoUri;
         this.query = query;
+        this.expectedRows = expectedRows;
     }
 
     public void run()
@@ -92,8 +94,9 @@ public class TrinoJdbcBenchmark
 
         long totalTime = 0;
 
+        long progressBase = expectedRows / 50;
+
         for (int i = 1; i <= RUNS; i++) {
-            System.out.println("=================================================");
             long rows = 1;
             long start = System.nanoTime();
             long decodingTime = 0;
@@ -106,17 +109,26 @@ public class TrinoJdbcBenchmark
                     while (resultSet.next()) {
                         rows++;
                         decodingTime += readColumns(resultSet);
+
+                        if (rows % progressBase == 0) {
+                            System.out.print("=");
+                        }
                     }
                 }
 
                 long elapsedTime = System.nanoTime() - start;
                 totalTime += elapsedTime;
 
+                System.out.print("\n");
                 System.out.println("[QUERY %d] Fetched %d rows in %s, decoding took %s".formatted(i, rows, formatNanos(elapsedTime), formatNanos(decodingTime)));
                 System.out.println("[HEAP %d] Used after: %s".formatted(i, formatSize(getUsedHeapMemory())));
             }
             catch (SQLException e) {
                 throw new RuntimeException(e);
+            }
+
+            if (rows != expectedRows) {
+                System.err.println("Expected %d rows but got %d".formatted(expectedRows, rows));
             }
         }
         System.out.println("Average time for %d runs: %s".formatted(RUNS, formatNanos(totalTime / RUNS)));
