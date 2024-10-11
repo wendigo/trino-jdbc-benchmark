@@ -31,14 +31,14 @@ docker run --rm --name jaeger \
 # Run some queries with JSON encoding (spooled protocol)
 
 ```
-./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "http://localhost:4317" "jdbc:trino://localhost:8080/tpch/sf10?encoding=json+zstd" "SELECT * FROM lineitem LIMIT 8000000" 8000000
-./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "http://localhost:4317" "jdbc:trino://localhost:8080/tpch/sf10?encoding=json+lz4" "SELECT * FROM lineitem LIMIT 8000000" 8000000
+./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "jdbc:trino://localhost:8080/tpch/sf10?encoding=json+zstd" "SELECT * FROM lineitem LIMIT 8000000" 8000000
+./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "jdbc:trino://localhost:8080/tpch/sf10?encoding=json+lz4" "SELECT * FROM lineitem LIMIT 8000000" 8000000
 ```
 
 # Or without (existing protocol)
 
 ```
-./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "http://localhost:4317" "jdbc:trino://localhost:8080/tpch/sf10" "SELECT * FROM lineitem LIMIT 8000000" 8000000
+./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar "jdbc:trino://localhost:8080/tpch/sf10" "SELECT * FROM lineitem LIMIT 8000000" 8000000
 ```
 
 # Check traces

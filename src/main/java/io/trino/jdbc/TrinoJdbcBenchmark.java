@@ -13,20 +13,6 @@
  */
 package io.trino.jdbc;
 
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.common.AttributesBuilder;
-import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
-import io.opentelemetry.context.propagation.ContextPropagators;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
-import io.opentelemetry.sdk.OpenTelemetrySdk;
-import io.opentelemetry.sdk.resources.Resource;
-import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.SpanProcessor;
-import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.sdk.trace.export.SpanExporter;
-import io.opentelemetry.semconv.ServiceAttributes;
-
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -40,7 +26,6 @@ public class TrinoJdbcBenchmark
 {
     private static final int RUNS = 10;
 
-    private final String tracingUri;
     private final String trinoUri;
     private final String query;
     private final int expectedRows;
@@ -49,17 +34,16 @@ public class TrinoJdbcBenchmark
             throws Exception
     {
         if (args.length == 0) {
-            System.out.println("Usage ./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar [TRACING COLLECTOR URI] [TRINO URI] [TRINO QUERY] [EXPECTED ROWS]");
+            System.out.println("Usage ./target/trino-jdbc-benchmark-1-SNAPSHOT-executable.jar [TRINO URI] [TRINO QUERY] [EXPECTED ROWS]");
         }
-        checkState(args.length == 4, "Expected 4 arguments, got %s", args.length);
+        checkState(args.length == 3, "Expected 3 arguments, got %s", args.length);
 
-        TrinoJdbcBenchmark benchmark = new TrinoJdbcBenchmark(args[0], args[1], args[2], Integer.parseInt(args[3]));
+        TrinoJdbcBenchmark benchmark = new TrinoJdbcBenchmark(args[0], args[1], Integer.parseInt(args[2]));
         benchmark.run();
     }
 
-    public TrinoJdbcBenchmark(String tracingUri, String trinoUri, String query, int expectedRows)
+    public TrinoJdbcBenchmark(String trinoUri, String query, int expectedRows)
     {
-        this.tracingUri = tracingUri;
         this.trinoUri = trinoUri;
         this.query = query;
         this.expectedRows = expectedRows;
@@ -68,71 +52,51 @@ public class TrinoJdbcBenchmark
     public void run()
             throws Exception
     {
-        AttributesBuilder attributes = Attributes.builder()
-                .put(ServiceAttributes.SERVICE_NAME, "trino-jdbc-benchmark");
+        try (TrinoDriver driver = new TrinoDriver()) {
+            System.out.println("Trino JDBC benchmark started with %s runs for query '%s' for Trino URI: %s".formatted(RUNS, query, trinoUri));
 
-        Resource resource = Resource.getDefault().merge(Resource.create(attributes.build()));
-        SpanExporter exporter = OtlpGrpcSpanExporter.builder()
-                .setEndpoint(tracingUri)
-                .build();
+            long totalTime = 0;
 
-        BatchSpanProcessor spanProcessor = BatchSpanProcessor.builder(exporter).build();
+            long progressBase = expectedRows / 50;
 
-        SdkTracerProvider tracerProvider = SdkTracerProvider.builder()
-                .addSpanProcessor(SpanProcessor.composite(spanProcessor))
-                .setResource(resource)
-                .build();
-
-        OpenTelemetry openTelemetry = OpenTelemetrySdk.builder()
-                .setTracerProvider(tracerProvider)
-                .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
-                .build();
-
-        TracingTrinoDriver driver = new TracingTrinoDriver(openTelemetry);
-
-        System.out.println("Trino JDBC benchmark started with %s runs for query '%s' for Trino URI: %s".formatted(RUNS, query, trinoUri));
-
-        long totalTime = 0;
-
-        long progressBase = expectedRows / 50;
-
-        for (int i = 1; i <= RUNS; i++) {
-            long rows = 1;
-            long start = System.nanoTime();
-            long decodingTime = 0;
-            try (Connection connection = driver.connect(trinoUri, connectionProperties())) {
-                try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(query)) {
-                    resultSet.next();
-                    decodingTime += readColumns(resultSet);
-                    System.out.println("[QUERY %d] Time to first row: %s".formatted(i, formatNanos(System.nanoTime() - start)));
-                    System.out.println("[HEAP %d] Used before: %s".formatted(i, formatSize(getUsedHeapMemory())));
-                    while (resultSet.next()) {
-                        rows++;
+            for (int i = 1; i <= RUNS; i++) {
+                long rows = 1;
+                long start = System.nanoTime();
+                long decodingTime = 0;
+                try (Connection connection = driver.connect(trinoUri, connectionProperties())) {
+                    try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(query)) {
+                        resultSet.next();
                         decodingTime += readColumns(resultSet);
+                        System.out.println("[QUERY %d] Time to first row: %s".formatted(i, formatNanos(System.nanoTime() - start)));
+                        System.out.println("[HEAP %d] Used before: %s".formatted(i, formatSize(getUsedHeapMemory())));
+                        while (resultSet.next()) {
+                            rows++;
+                            decodingTime += readColumns(resultSet);
 
-                        if (rows % progressBase == 0) {
-                            System.out.print("=");
+                            if (rows % progressBase == 0) {
+                                System.out.print("=");
+                            }
                         }
                     }
+
+                    long elapsedTime = System.nanoTime() - start;
+                    totalTime += elapsedTime;
+
+                    System.out.print("\n");
+                    System.out.println("[QUERY %d] Fetched %d rows in %s, decoding took %s".formatted(i, rows, formatNanos(elapsedTime), formatNanos(decodingTime)));
+                    System.out.println("[HEAP %d] Used after: %s".formatted(i, formatSize(getUsedHeapMemory())));
+                }
+                catch (SQLException e) {
+                    throw new RuntimeException(e);
                 }
 
-                long elapsedTime = System.nanoTime() - start;
-                totalTime += elapsedTime;
-
-                System.out.print("\n");
-                System.out.println("[QUERY %d] Fetched %d rows in %s, decoding took %s".formatted(i, rows, formatNanos(elapsedTime), formatNanos(decodingTime)));
-                System.out.println("[HEAP %d] Used after: %s".formatted(i, formatSize(getUsedHeapMemory())));
+                if (rows != expectedRows) {
+                    System.err.println("Expected %d rows but got %d".formatted(expectedRows, rows));
+                }
             }
-            catch (SQLException e) {
-                throw new RuntimeException(e);
-            }
-
-            if (rows != expectedRows) {
-                System.err.println("Expected %d rows but got %d".formatted(expectedRows, rows));
-            }
+            System.out.println("Average time for %d runs: %s".formatted(RUNS, formatNanos(totalTime / RUNS)));
+            System.exit(0);
         }
-        System.out.println("Average time for %d runs: %s".formatted(RUNS, formatNanos(totalTime / RUNS)));
-        System.exit(0);
     }
 
     private static long readColumns(ResultSet resultSet)
